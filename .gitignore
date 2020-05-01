@@ -1,0 +1,17 @@
+*.vim
+*/project/boot
+*/project/build/target
+*/project/project.target.config-classes
+.#*
+.*.swp
+.DS_Store
+.ensime*
+.idea
+.project
+deploy/*.jar
+project/boot/*
+project/plugins/project
+target
+target-sbt
+\.terraform
+*.tfstate
