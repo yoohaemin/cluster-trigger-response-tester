@@ -35,13 +35,15 @@ object Main extends App {
       nodeToTrigger: Node,
       endpointToTrigger: Endpoint,
       endpointsToMonitor: List[Endpoint],
+      hostHeader: String,
       monitorRequestCount: Int,
       description: String
   )
 
   case class SingleTestRequest(
       node: Node,
-      endpoint: Endpoint
+      endpoint: Endpoint,
+      hostHeader: String
   ) {
     lazy val method = endpoint.method
     lazy val uri    = node.addr.path(endpoint.path)
@@ -115,6 +117,7 @@ object Main extends App {
         getProperties("endpoint.trigger").flatMap(parseEndpoint),
         getProperties("endpoint.monitor").flatMap(s => ZIO.foreach(s.split(";"))(parseEndpoint)),
         getProperties("description"),
+        getProperties("header.host"),
         getProperties("monitor.request.count").flatMap(s =>
           ZIO
             .fromOption(s.toIntOption)
@@ -127,6 +130,7 @@ object Main extends App {
               endpointTrigger,
               endpointMonitor,
               description,
+              hostHeader,
               monitorRequestCount
             ) =>
           ZIO.fromOption(nodeList.find(_.name == nodeToTrigger)).mapError(_ =>
@@ -137,6 +141,7 @@ object Main extends App {
               nodeToTrigger = nodeToTrigger,
               endpointToTrigger = endpointTrigger,
               endpointsToMonitor = endpointMonitor,
+              hostHeader = hostHeader,
               monitorRequestCount = monitorRequestCount,
               description = description
             )
@@ -174,7 +179,7 @@ object Main extends App {
     for {
       timestamp <- clock.currentDateTime.orDie
       result <- ZIO.foreach(requests) { request =>
-                  val req = basicRequest.method(request.method, request.uri)
+                  val req = basicRequest.method(request.method, request.uri).header("Host", request.hostHeader)
                   SttpClient.send(req).timed
                     .fold(
                       err =>
@@ -231,19 +236,18 @@ object Main extends App {
   override def run(args: List[String]): ZIO[ZEnv, Nothing, Int] =
     getConfig(args.head)
       .flatMap {
-        case RunInfo(cluster, nodeToTrigger, endpointToTrigger, endpointsToMonitor, monitorRequestCount, description) =>
+        case RunInfo(cluster, nodeToTrigger, endpointToTrigger, endpointsToMonitor, hostHeader, monitorRequestCount, description) =>
           val monitorRequests = for {
             node            <- cluster.nodes
             monitorEndpoint <- endpointsToMonitor
-          } yield SingleTestRequest(node, monitorEndpoint)
+          } yield SingleTestRequest(node, monitorEndpoint, hostHeader)
 
-          val triggerRequest = SingleTestRequest(nodeToTrigger, endpointToTrigger)
+          val triggerRequest = SingleTestRequest(nodeToTrigger, endpointToTrigger, hostHeader)
 
           val fireTriggerRequest: RIO[
             Console with Clock with SttpClient,
             List[SingleTestResult]
           ] =
-            ZIO.sleep(2.seconds) *>
               putStrLn(s"firing trigger $triggerRequest") *>
               fireRequest(List(triggerRequest))
 
@@ -257,7 +261,7 @@ object Main extends App {
               .run(formatResult)
 
           ZIO.foreach(monitorRequests)(req => putStrLn(req.toString)) *>
-            (fireTriggerRequest <&> fireMonitorRequests <*> ZIO.succeed(description))
+            (fireTriggerRequest <*> fireMonitorRequests <*> ZIO.succeed(description))
       }
       .provideSomeLayer[ZEnv](AsyncHttpClientZioBackend.layer())
       .foldM(
